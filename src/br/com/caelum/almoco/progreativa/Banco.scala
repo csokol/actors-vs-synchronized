@@ -10,53 +10,47 @@ import scala.concurrent.ExecutionContext
 import scala.util.Failure
 import scala.util.Try
 import scala.util.Success
+import scala.collection.mutable.ListBuffer
+import akka.actor.ActorRef
 
-case class Banco extends Actor {
+case class Banco(val concurrency:Int) extends Actor {
 
-  implicit val timeout: Timeout = Timeout(5 seconds)
+  implicit val timeout: Timeout = MainActors.timeout 
   implicit val executionContext = ExecutionContext.Implicits.global
-
-  val c1 = context.actorOf(Props(classOf[Conta], 1, self))
-  val c2 = context.actorOf(Props(classOf[Conta], 2, self))
   var id = 0l;
 
-  c1 ! Deposita(nextid, 100.0)
-  c1 ! Deposita(nextid, 100.0)
-  (c1 ? GetSaldo(nextid)).onComplete {mostraSaldo}
+  val usuarios = ListBuffer[ActorRef]()
+  val conta = context.actorOf(Props(classOf[Conta], 1, self))
+  var acks = 0;
+  var ti: Long = 0;
+  var tf: Long = 0;
 
-  val transf = nextid
-  c1 ! Transfere(transf, 100.0, c2)
-  println("oi")
+  (0 until concurrency).foreach { i =>
+    val actor = context.actorOf(Props(classOf[Usuario], conta))
+    usuarios += actor
+  }
 
   def receive = {
-//        case GetSaldoResp(id, numero, valor) => {
-//          println("saldo da conta " + numero + ": " + valor)
-//        }
-    case Ok(this.transf) => {
-      (c2 ? GetSaldo(nextid)).onComplete {mostraSaldo}
+    case Start => {
+      ti = System.currentTimeMillis
+      usuarios.foreach(_ ! Start)
     }
-    case Ok(id) => {
-      println("ok perdido: " + id)
-    }
-    case perdida => {
-      println("msg perdida em " + toString() + ": " + perdida)
+    case Ok => {
+      acks += 1
+      if (acks >= concurrency) {
+        (conta ? GetSaldo(1)).onComplete {
+          case Success(GetSaldoResp(id, numero, saldo)) => {
+//            println("concorrencia: " + concurrency)
+//            println("saldo final: " + saldo)
+            tf = System.currentTimeMillis
+            println(concurrency + "," + (tf - ti))
+            exit
+          }
+        }
+      }
     }
   }
 
-  def mostraSaldo: Try[Any] => Unit = { t =>
-    t match {
-      case Success(GetSaldoResp(id, numero, saldo)) => {
-        println("saldo: " + saldo)
-      }
-      case Failure(e) => {
-        println(e)
-      }
-    }
-  }
-  
-  def nextid = {
-    id += 1
-    id
-  }
-  
 }
+
+case class Start
